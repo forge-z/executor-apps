@@ -1,0 +1,1 @@
+{"name":"radar-news","version":"0.1.0","private":true,"type":"module","scripts":{"check":"tsc --noEmit -p tsconfig.json","test":"tsc -p tsconfig.json && node --test tests/*.test.mjs"},"dependencies":{"apps":"0.0.1-beta.143"},"devDependencies":{"typescript":"5.9.3"}}
