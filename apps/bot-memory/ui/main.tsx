@@ -28,12 +28,22 @@ function ForgetReview({ row, onClose }: {
       onClose();
     }}>
       <h2 id="forget-title">Review fact for forgetting</h2>
-      <p id="forget-note">Forgetting removes this fact and blocks reuse of its key.</p>
+      <p id="forget-note">Forgetting removes this fact and its history and blocks reuse of its key.</p>
       <dl>
         <dt>Key</dt><dd><code>{row.key}</code></dd>
         <dt>Fact text</dt><dd>{row.text}</dd>
         <dt>Revision</dt><dd>{row.revision}</dd>
       </dl>
+      {row.history.length > 0 && <>
+        <h3>Previous revisions</h3>
+        <dl>
+          {row.history.map(({ revision, text }) => (
+            <div key={revision}>
+              <dt>Revision {revision}</dt><dd>{text}</dd>
+            </div>
+          ))}
+        </dl>
+      </>}
       <p>In the same app’s native Executor <strong>Tools</strong> tab, run <code>admin.forget</code> with these arguments.</p>
       <pre><code>{JSON.stringify({ key: row.key, expectedRevision: row.revision }, null, 2)}</code></pre>
       <p>Review the saved call in Executor and approve it to proceed. After the call finishes, return here and select <strong>Refresh results</strong>.</p>

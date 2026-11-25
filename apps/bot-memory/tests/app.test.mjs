@@ -35,7 +35,7 @@ beforeEach(t => {
   });
 });
 
-async function host(t, seedLegacy) {
+async function host(t, seedLegacy, legacyMigrationCount = 1) {
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());
   let transactionDepth = 0;
@@ -89,7 +89,7 @@ async function host(t, seedLegacy) {
   assert.equal(requirementsReply.status, 200);
   const requirements = requirementsReply.body.value;
   if (seedLegacy) {
-    await success({ operation: 'migrate' }, undefined, undefined, files.slice(0, 1));
+    await success({ operation: 'migrate' }, undefined, undefined, files.slice(0, legacyMigrationCount));
     seedLegacy(db);
   }
   await success({ operation: 'migrate' });
@@ -158,19 +158,19 @@ test('admin list reads legacy facts with bounded key cursors and literal key/tex
   });
   assert.deepEqual(await h.list({ limit: 2 }), {
     status: 'ok', rows: [
-      { key: 'alpha-1', text: 'Different fact', revision: 2 },
-      { key: 'alpha_1', text: special, revision: 7 },
+      { key: 'alpha-1', text: 'Different fact', revision: 2, history: [] },
+      { key: 'alpha_1', text: special, revision: 7, history: [] },
     ], nextCursor: 'alpha_1',
   });
   assert.deepEqual(await h.list({ cursor: 'alpha_1', limit: 2 }), {
-    status: 'ok', rows: [{ key: 'zulu', text: 'Café without punctuation', revision: 1 }], nextCursor: null,
+    status: 'ok', rows: [{ key: 'zulu', text: 'Café without punctuation', revision: 1, history: [] }], nextCursor: null,
   });
   assert.deepEqual((await h.list({ cursor: 'alpha.1', limit: 1 })).rows.map(row => row.key), ['alpha_1']);
   for (const filter of ['%', '_', '\\', "'", ' <script>  ', 'alpha_1']) {
     assert.deepEqual((await h.list({ filter })).rows.map(row => row.key), ['alpha_1'], filter);
   }
   assert.deepEqual(await h.list({ filter: 'Café', limit: 1 }), {
-    status: 'ok', rows: [{ key: 'alpha_1', text: special, revision: 7 }], nextCursor: 'alpha_1',
+    status: 'ok', rows: [{ key: 'alpha_1', text: special, revision: 7, history: [] }], nextCursor: 'alpha_1',
   });
   assert.deepEqual((await h.list({ filter: 'Café', cursor: 'alpha_1', limit: 1 })).rows.map(row => row.key), ['zulu']);
   assert.deepEqual(await h.list({ filter: "' OR 1=1 --" }), { status: 'ok', rows: [], nextCursor: null });
@@ -181,6 +181,52 @@ test('admin list reads legacy facts with bounded key cursors and literal key/tex
   for (let i = 0; i < 51; i++) insert.run(`key.${String(i).padStart(2, '0')}`, 'Bounded list');
   assert.equal((await h.list()).rows.length, 25);
   assert.equal((await h.list({ limit: 50 })).rows.length, 50);
+  assert.equal(requests.length, 0);
+});
+
+test('history migration preserves current facts and tombstones from 0002', async t => {
+  const h = await host(t, db => {
+    db.prepare('INSERT INTO memory VALUES (?, ?, ?, ?)').run('legacy', 'Legacy text', 3, '[1,2,3]');
+    db.prepare('INSERT INTO memory_tombstones VALUES (?)').run('forgotten');
+  }, 2);
+  assert.deepEqual((await h.list()).rows, [{ key: 'legacy', text: 'Legacy text', revision: 3, history: [] }]);
+  assert.equal(h.db.prepare('SELECT embedding FROM memory WHERE key = ?').get('legacy').embedding, '[1,2,3]');
+  assert.equal((await h.retain({ key: 'forgotten', text: 'Still blocked' })).status, 'forgotten');
+  assert.equal((await h.retain({ key: 'legacy', text: 'Updated text' })).status, 'stored');
+  assert.deepEqual((await h.list()).rows[0].history, [{ revision: 3, text: 'Legacy text' }]);
+});
+
+test('admin list returns prior text newest first without including it in filters or recall', async t => {
+  const h = await host(t);
+  const key = 'profile';
+  await h.retain({ key, text: 'First fact' });
+  assert.deepEqual((await h.list()).rows, [{ key, text: 'First fact', revision: 1, history: [] }]);
+  await h.retain({ key, text: 'Second fact' });
+  assert.equal((await h.retain({ key, text: ' Second fact ' })).status, 'unchanged');
+  await h.retain({ key, text: 'Third fact' });
+  assert.deepEqual(await h.list({ filter: 'Third' }), {
+    status: 'ok', rows: [{
+      key, text: 'Third fact', revision: 3, history: [
+        { revision: 2, text: 'Second fact' },
+        { revision: 1, text: 'First fact' },
+      ],
+    }], nextCursor: null,
+  });
+  assert.deepEqual((await h.list({ filter: 'First' })).rows, []);
+  assert.deepEqual((await h.recall({ query: 'First' })).results, []);
+});
+
+test('a current-row update failure rolls back the history insert', async t => {
+  const h = await host(t);
+  await h.retain({ key: 'atomic', text: 'Keep on failure' });
+  const before = (await h.list()).rows;
+  h.db.exec(`CREATE TRIGGER reject_update BEFORE UPDATE ON memory
+    BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;`);
+  const response = await h.request({
+    operation: 'call', tool: 'retain', kind: 'mutation', input: { key: 'atomic', text: 'Do not store' },
+  }, h.accounts());
+  assert.equal(response.body.error._tag, 'HostOperationFailed');
+  assert.deepEqual((await h.list()).rows, before);
   assert.equal(requests.length, 0);
 });
 
@@ -232,7 +278,9 @@ test('forget rejects stale and invalid requests, deletes the exact row, and fenc
   await h.retain({ key: original.key, text: 'Corrected fact' });
   assert.deepEqual(await h.forget({ key: original.key, expectedRevision: original.revision }), { status: 'stale_revision' });
   const current = (await h.list({ filter: 'exact_key' })).rows[0];
-  assert.deepEqual(current, { key: original.key, text: 'Corrected fact', revision: 5 });
+  assert.deepEqual(current, {
+    key: original.key, text: 'Corrected fact', revision: 5, history: [{ revision: 4, text: original.text }],
+  });
   for (const [key, expectedRevision] of [['EXACT_KEY', 5], ['exact_key ', 5], ['%', 5], ['exact_key', 0],
     ['exact_key', 1.5], ['exact_key', Number.MAX_SAFE_INTEGER + 1]]) {
     assert.deepEqual(await h.forget({ key, expectedRevision }), { status: 'invalid_input' });
@@ -251,16 +299,18 @@ test('forget rejects stale and invalid requests, deletes the exact row, and fenc
     { key: 'exact-key', text: 'Unrelated fact', revision: 1, embedding: '[4,5,6]' },
   ]);
   assert.deepEqual(h.db.prepare('SELECT * FROM memory_tombstones').all().map(row => ({ ...row })), [{ key: current.key }]);
+  assert.deepEqual(h.db.prepare('SELECT * FROM memory_history').all(), []);
   assert.equal(requests.length, 0);
 });
 
 test('a tombstone write failure leaves the entire fact intact', async t => {
   const h = await host(t);
   await h.retain({ key: 'atomic', text: 'Keep on failure' });
+  await h.retain({ key: 'atomic', text: 'Keep this revision too' });
   const before = (await h.list()).rows;
   h.db.exec(`CREATE TRIGGER reject_tombstone BEFORE INSERT ON memory_tombstones
     BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;`);
-  const input = { key: 'atomic', expectedRevision: 1 };
+  const input = { key: 'atomic', expectedRevision: 2 };
   const response = await h.request({ operation: 'mutate', name: 'admin.forget', input }, undefined,
     { tool: 'admin.forget', input });
   assert.equal(response.body.error._tag, 'HostOperationFailed');
