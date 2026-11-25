@@ -4,7 +4,12 @@ export function choice<const T extends string>(values: readonly T[]): Schema<T> 
   return jsonSchema({ type: "string", enum: values }) as Schema<T>;
 }
 
-const listedFact = object({ key: string(), text: string(), revision: number() });
+const listedFact = object({
+  key: string(),
+  text: string(),
+  revision: number(),
+  history: array(object({ revision: number(), text: string() })),
+});
 export type ListedFact = Infer<typeof listedFact>;
 
 export const listOutput = object({

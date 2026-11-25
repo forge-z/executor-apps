@@ -8,6 +8,7 @@ import { embed, normalizeVector, openai, providerFailures } from "./src/openai.j
 
 const requirements = { app: { accounts: { openai: openai.many() } } };
 const capacity = 300;
+const historyCapacity = 1000;
 const defaultPageSize = 25;
 const maxPageSize = 50;
 const minimumCosine = 0.65;
@@ -91,7 +92,7 @@ function isForgotten(sql: SqlReader, key: string): boolean {
 }
 
 const retain = mutation({
-  description: "Save an explicit memory fact. Reuse its key to correct the current text.",
+  description: "Save an explicit memory fact. Reuse its key to correct the current text and keep the previous revision for human review.",
   input: object({
     key: string({ description: "ASCII key matching [a-z0-9][a-z0-9_.-]{0,63}." }),
     text: string({ description: "Explicit fact, 1–600 characters after trimming." }),
@@ -109,7 +110,11 @@ const retain = mutation({
     const current = tx.exec<MemoryRow>("SELECT key, text, revision, embedding FROM memory WHERE key = ?", key).toArray()[0];
     if (current?.text === text) return { status: "unchanged", hasVector: current.embedding !== null } as const;
     if (current) {
+      if (tx.exec<{ count: number }>("SELECT count(*) AS count FROM memory_history").one().count >= historyCapacity) {
+        return { status: "full" } as const;
+      }
       const revision = current.revision + 1;
+      tx.exec("INSERT INTO memory_history (key, revision, text) VALUES (?, ?, ?)", key, current.revision, current.text);
       tx.exec("UPDATE memory SET text = ?, revision = ?, embedding = NULL WHERE key = ?", text, revision, key);
       return { status: "stored", revision } as const;
     }
@@ -166,7 +171,7 @@ const recall = query({
 });
 
 export const listMemory = query({
-  description: "List a page of current memory facts in key order for human review.",
+  description: "List a page of current memory facts in key order, with previous revisions for human review.",
   input: object({
     cursor: string({ description: "Start after this key. Use nextCursor from the preceding page." }).optional(),
     filter: string({ description: "Literal, case-sensitive key or text substring, up to 600 characters." }).optional(),
@@ -178,18 +183,24 @@ export const listMemory = query({
       !Number.isInteger(limit) || limit < 1 || limit > maxPageSize) {
     return { status: "invalid_input", rows: [], nextCursor: null };
   }
-  const rows = ctx.sql.exec<ListedFact>(
+  const page = ctx.sql.exec<Pick<ListedFact, "key" | "text" | "revision">>(
     `SELECT key, text, revision FROM memory
      WHERE key > ? AND (instr(key, ?) > 0 OR instr(text, ?) > 0)
      ORDER BY key LIMIT ?`, cursor ?? "", filter, filter, limit + 1,
   ).toArray();
-  const hasMore = rows.length > limit;
-  if (hasMore) rows.pop();
+  const hasMore = page.length > limit;
+  if (hasMore) page.pop();
+  const rows = page.map(row => ({
+    ...row,
+    history: ctx.sql.exec<ListedFact["history"][number]>(
+      "SELECT revision, text FROM memory_history WHERE key = ? ORDER BY revision DESC", row.key,
+    ).toArray(),
+  }));
   return { status: "ok", rows, nextCursor: hasMore ? rows[limit - 1].key : null };
 });
 
 export const forgetMemory = mutation({
-  description: "Permanently delete one reviewed fact and block future retains of its key. Requires human approval.",
+  description: "Permanently delete one reviewed fact and its history, and block future retains of its key. Requires human approval.",
   input: object({
     key: string({ description: "Exact key from admin.list." }),
     expectedRevision: number({ description: "Exact revision from admin.list." }),
@@ -203,6 +214,7 @@ export const forgetMemory = mutation({
   return ctx.sql.transaction(tx => {
     const deleted = tx.exec("DELETE FROM memory WHERE key = ? AND revision = ?", key, expectedRevision);
     if (deleted.rowsWritten > 0) {
+      tx.exec("DELETE FROM memory_history WHERE key = ?", key);
       tx.exec("INSERT INTO memory_tombstones (key) VALUES (?)", key);
       return { status: "forgotten" };
     }
