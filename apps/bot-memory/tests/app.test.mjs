@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test, { beforeEach } from 'node:test';
 import { createAppHandler, hostContext } from 'apps/host';
+import { AppUiApi } from 'apps/ui/contracts';
 import app from '../build/index.js';
 
 const model = 'text-embedding-3-small';
 const api = 'https://api.openai.com/v1';
 const dummyKey = 'dummy-offline-fixture';
 const upstreamSecret = 'synthetic-private-upstream-error';
-const migration = 'migrations/0001_memory.sql';
-const files = [{ path: migration, content: readFileSync(new URL('../' + migration, import.meta.url), 'utf8') }];
+const migrations = new URL('../migrations/', import.meta.url);
+const files = readdirSync(migrations).filter(name => name.endsWith('.sql')).sort().map(name => ({
+  path: 'migrations/' + name, content: readFileSync(new URL(name, migrations), 'utf8'),
+}));
 
 let requests;
 let respond;
@@ -32,7 +35,7 @@ beforeEach(t => {
   });
 });
 
-async function host(t) {
+async function host(t, seedLegacy) {
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());
   let transactionDepth = 0;
@@ -69,22 +72,26 @@ async function host(t) {
     },
   };
   const handle = createAppHandler(app);
-  async function request(payload, accounts = { openai: [] }) {
+  async function request(payload, accounts = { openai: [] }, approval, packageFiles = files) {
     const response = await handle(new Request('https://executor.local/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    }), { ...hostContext({ app: accounts, user: {} }), storage, files });
+    }), { ...hostContext({ app: accounts, user: {} }, approval), storage, files: packageFiles });
     return { status: response.status, body: await response.json() };
   }
-  async function success(payload, accounts) {
-    const result = await request(payload, accounts);
+  async function success(payload, accounts, approval, packageFiles) {
+    const result = await request(payload, accounts, approval, packageFiles);
     assert.equal(result.status, 200, JSON.stringify(result.body.error));
     return result.body.value;
   }
   const requirementsReply = await request({ operation: 'requirements' });
   assert.equal(requirementsReply.status, 200);
   const requirements = requirementsReply.body.value;
+  if (seedLegacy) {
+    await success({ operation: 'migrate' }, undefined, undefined, files.slice(0, 1));
+    seedLegacy(db);
+  }
   await success({ operation: 'migrate' });
   const account = (id = 'acc_fixture') => ({
     id,
@@ -93,11 +100,16 @@ async function host(t) {
     fields: { key: dummyKey },
   });
   return {
-    request, success, requirements, account,
+    db, request, success, requirements, account,
     accounts: () => ({ openai: [account()] }),
     inTransaction: () => transactionDepth !== 0,
     retain: (input, accounts) => success({ operation: 'call', tool: 'retain', kind: 'mutation', input }, accounts),
     recall: (input, accounts) => success({ operation: 'call', tool: 'recall', kind: 'query', input }, accounts),
+    list: (input = {}) => success({ operation: 'query', name: 'admin.list', input }, { openai: [account()] }),
+    forget: input => success(
+      { operation: 'call', tool: 'admin.forget', kind: 'mutation', input },
+      { openai: [account()] }, { tool: 'admin.forget', input },
+    ),
   };
 }
 
@@ -110,14 +122,14 @@ function embedding(axis, scale = 1) {
   });
 }
 
-test('real SDK migration and two scoped tools support accent-insensitive lexical recall without fetch', async t => {
+test('real SDK migration and retained bot tools support accent-insensitive lexical recall without fetch', async t => {
   const h = await host(t);
   assert.equal(h.requirements.sql, true);
   assert.deepEqual(Object.keys(h.requirements.accounts.app), ['openai']);
   assert.deepEqual(h.requirements.accounts.user, {});
   assert.equal(h.requirements.accounts.app.openai.cardinality, 'many');
   assert.deepEqual(h.requirements.accounts.app.openai.definition.hosts, ['api.openai.com']);
-  const catalog = await h.success({ operation: 'inspect' });
+  const catalog = await h.success({ operation: 'inspect', tools: ['retain', 'recall'] });
   assert.deepEqual(catalog.tools.map(tool => [tool.name, tool.readOnly]).sort(), [['recall', true], ['retain', false]]);
   for (const tool of catalog.tools) {
     assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), tool.name === 'recall' ? ['limit', 'query'] : ['key', 'text']);
@@ -134,6 +146,150 @@ test('real SDK migration and two scoped tools support accent-insensitive lexical
   });
   assert.deepEqual((await h.recall({ query: 'helicóptero' })).results, []);
   assert.equal(requests.length, 0);
+});
+
+test('admin list reads legacy facts with bounded key cursors and literal key/text filters', async t => {
+  const special = "  Café %_\\ ' <script>  ";
+  const h = await host(t, db => {
+    const insert = db.prepare('INSERT INTO memory VALUES (?, ?, ?, ?)');
+    insert.run('zulu', 'Café without punctuation', 1, null);
+    insert.run('alpha_1', special, 7, JSON.stringify([1, 2, 3]));
+    insert.run('alpha-1', 'Different fact', 2, null);
+  });
+  assert.deepEqual(await h.list({ limit: 2 }), {
+    status: 'ok', rows: [
+      { key: 'alpha-1', text: 'Different fact', revision: 2 },
+      { key: 'alpha_1', text: special, revision: 7 },
+    ], nextCursor: 'alpha_1',
+  });
+  assert.deepEqual(await h.list({ cursor: 'alpha_1', limit: 2 }), {
+    status: 'ok', rows: [{ key: 'zulu', text: 'Café without punctuation', revision: 1 }], nextCursor: null,
+  });
+  assert.deepEqual((await h.list({ cursor: 'alpha.1', limit: 1 })).rows.map(row => row.key), ['alpha_1']);
+  for (const filter of ['%', '_', '\\', "'", ' <script>  ', 'alpha_1']) {
+    assert.deepEqual((await h.list({ filter })).rows.map(row => row.key), ['alpha_1'], filter);
+  }
+  assert.deepEqual(await h.list({ filter: 'Café', limit: 1 }), {
+    status: 'ok', rows: [{ key: 'alpha_1', text: special, revision: 7 }], nextCursor: 'alpha_1',
+  });
+  assert.deepEqual((await h.list({ filter: 'Café', cursor: 'alpha_1', limit: 1 })).rows.map(row => row.key), ['zulu']);
+  assert.deepEqual(await h.list({ filter: "' OR 1=1 --" }), { status: 'ok', rows: [], nextCursor: null });
+  for (const input of [{ limit: 0 }, { limit: 51 }, { limit: 1.5 }, { cursor: 'ALPHA_1' }, { filter: 'x'.repeat(601) }]) {
+    assert.deepEqual(await h.list(input), { status: 'invalid_input', rows: [], nextCursor: null });
+  }
+  const insert = h.db.prepare('INSERT INTO memory (key, text, revision) VALUES (?, ?, 1)');
+  for (let i = 0; i < 51; i++) insert.run(`key.${String(i).padStart(2, '0')}`, 'Bounded list');
+  assert.equal((await h.list()).rows.length, 25);
+  assert.equal((await h.list({ limit: 50 })).rows.length, 50);
+  assert.equal(requests.length, 0);
+});
+
+test('admin catalog is namespaced and both tool and browser-shaped mutations require exact-call host approval', async t => {
+  const h = await host(t);
+  const catalog = await h.success({ operation: 'inspect', detail: 'summary' });
+  assert.deepEqual(catalog.tools.map(tool => [tool.name, tool.readOnly]).sort(), [
+    ['admin.forget', false], ['admin.list', true], ['recall', true], ['retain', false],
+  ]);
+  const { tools } = await h.success({ operation: 'inspect', tools: ['admin.forget', 'admin.list'] });
+  for (const tool of tools) {
+    assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(),
+      tool.name === 'admin.forget' ? ['expectedRevision', 'key'] : ['cursor', 'filter', 'limit']);
+    assert.ok(tool.outputSchema);
+  }
+
+  await h.retain({ key: 'ready', text: 'Pending approval' });
+  assert.deepEqual(await h.success({ operation: 'call', tool: 'admin.list', kind: 'query', input: {} }), await h.list());
+  const uiEndpoints = AppUiApi.groups.ui.endpoints;
+  assert.deepEqual(Object.keys(uiEndpoints).sort(), ['mutate', 'query', 'subscribe']);
+  assert.equal(uiEndpoints.mutate.path, '/_executor/api/mutate');
+  const input = { key: 'ready', expectedRevision: 1 };
+  const call = { operation: 'call', tool: 'admin.forget', kind: 'mutation', input };
+  const browser = { operation: 'mutate', name: 'admin.forget', input };
+  for (const payload of [call, browser]) {
+    const response = await h.request(payload);
+    assert.equal(response.status, 409, JSON.stringify(response.body.error));
+    assert.equal(response.body.error._tag, 'HostToolApprovalRequired');
+    assert.deepEqual(response.body.error.input, input);
+    assert.equal(response.body.error.elicitation.mode, 'form');
+  }
+  const forged = await h.request({ ...browser, approval: { tool: 'admin.forget', input } });
+  assert.ok(forged.status >= 400);
+  const wrong = await h.request(call, undefined, { tool: 'admin.forget', input: { ...input, expectedRevision: 2 } });
+  assert.equal(wrong.body.error._tag, 'HostInputInvalid');
+  assert.equal((await h.list()).rows[0].key, 'ready');
+  assert.deepEqual(await h.forget(input), { status: 'forgotten' });
+  assert.deepEqual((await h.list()).rows, []);
+  assert.equal(requests.length, 0);
+});
+
+test('forget rejects stale and invalid requests, deletes the exact row, and fences repeat retain', async t => {
+  const h = await host(t, db => {
+    const insert = db.prepare('INSERT INTO memory VALUES (?, ?, ?, ?)');
+    insert.run('exact_key', 'Original fact', 4, '[1,2,3]');
+    insert.run('exact-key', 'Unrelated fact', 1, '[4,5,6]');
+  });
+  const original = (await h.list({ filter: 'exact_key' })).rows[0];
+  await h.retain({ key: original.key, text: 'Corrected fact' });
+  assert.deepEqual(await h.forget({ key: original.key, expectedRevision: original.revision }), { status: 'stale_revision' });
+  const current = (await h.list({ filter: 'exact_key' })).rows[0];
+  assert.deepEqual(current, { key: original.key, text: 'Corrected fact', revision: 5 });
+  for (const [key, expectedRevision] of [['EXACT_KEY', 5], ['exact_key ', 5], ['%', 5], ['exact_key', 0],
+    ['exact_key', 1.5], ['exact_key', Number.MAX_SAFE_INTEGER + 1]]) {
+    assert.deepEqual(await h.forget({ key, expectedRevision }), { status: 'invalid_input' });
+  }
+  assert.deepEqual(await h.forget({ key: 'absent', expectedRevision: 1 }), { status: 'not_found' });
+  h.db.prepare('UPDATE memory SET embedding = ? WHERE key = ?').run('[1,0,0]', current.key);
+  const args = { key: current.key, expectedRevision: current.revision };
+  assert.deepEqual(await h.forget(args), { status: 'forgotten' });
+  assert.deepEqual(await h.forget(args), { status: 'already_forgotten' });
+  assert.deepEqual(await h.retain({ key: current.key, text: 'Try to recreate' }, h.accounts()), {
+    status: 'forgotten', key: current.key, embedding: 'not_attempted',
+  });
+  assert.deepEqual((await h.list({ filter: current.key })).rows, []);
+  assert.deepEqual((await h.recall({ query: 'corrected' })).results, []);
+  assert.deepEqual(h.db.prepare('SELECT * FROM memory').all().map(row => ({ ...row })), [
+    { key: 'exact-key', text: 'Unrelated fact', revision: 1, embedding: '[4,5,6]' },
+  ]);
+  assert.deepEqual(h.db.prepare('SELECT * FROM memory_tombstones').all().map(row => ({ ...row })), [{ key: current.key }]);
+  assert.equal(requests.length, 0);
+});
+
+test('a tombstone write failure leaves the entire fact intact', async t => {
+  const h = await host(t);
+  await h.retain({ key: 'atomic', text: 'Keep on failure' });
+  const before = (await h.list()).rows;
+  h.db.exec(`CREATE TRIGGER reject_tombstone BEFORE INSERT ON memory_tombstones
+    BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;`);
+  const input = { key: 'atomic', expectedRevision: 1 };
+  const response = await h.request({ operation: 'mutate', name: 'admin.forget', input }, undefined,
+    { tool: 'admin.forget', input });
+  assert.equal(response.body.error._tag, 'HostOperationFailed');
+  assert.deepEqual((await h.list()).rows, before);
+  assert.deepEqual(h.db.prepare('SELECT * FROM memory_tombstones').all(), []);
+  assert.equal(requests.length, 0);
+});
+
+test('forget fences a retain while its embedding request is pending', { timeout: 6000 }, async t => {
+  const h = await host(t);
+  const started = Promise.withResolvers();
+  const reply = Promise.withResolvers();
+  respond = () => {
+    started.resolve();
+    return reply.promise;
+  };
+  const pending = h.retain({ key: 'in-flight', text: 'Synthetic pending fact' }, h.accounts());
+  try {
+    await Promise.race([started.promise, pending.then(() => assert.fail('retain did not request an embedding'))]);
+    const [row] = (await h.list()).rows;
+    assert.deepEqual(await h.forget({ key: row.key, expectedRevision: row.revision }), { status: 'forgotten' });
+    assert.equal((await h.retain({ key: row.key, text: 'Stale suggestion' }, h.accounts())).status, 'forgotten');
+  } finally {
+    reply.resolve(embedding(0));
+    await pending;
+  }
+  assert.equal((await pending).embedding, 'superseded');
+  assert.deepEqual((await h.list()).rows, []);
+  assert.equal(requests.length, 1);
 });
 
 test('corrections replace current text, and each installation owns its SQLite data', async t => {

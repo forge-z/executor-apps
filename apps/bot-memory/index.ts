@@ -2,10 +2,14 @@ import {
   array, defineApp, jsonSchema, mutation, number, object, query, router, string,
   type Infer, type MutationContext, type QueryContext, type Schema, type SqlReader,
 } from "apps";
+import { always } from "apps/operations/approval";
+import { choice, forgetOutput, listOutput, type ListedFact } from "./src/admin-schema.js";
 import { embed, normalizeVector, openai, providerFailures } from "./src/openai.js";
 
 const requirements = { app: { accounts: { openai: openai.many() } } };
 const capacity = 300;
+const defaultPageSize = 25;
+const maxPageSize = 50;
 const minimumCosine = 0.65;
 const keyPattern = /^[a-z0-9][a-z0-9_.-]{0,63}$/u;
 const stopwords = new Set("a ao aos as com da das de do dos e em na nas no nos o os ou para por que se um uma the an of and in to is for".split(" "));
@@ -18,12 +22,8 @@ const fact = object({ key: string(), text: string() });
 type Fact = Infer<typeof fact>;
 type MemoryRow = Fact & { revision: number; embedding: string | null };
 
-function choice<const T extends string>(values: readonly T[]): Schema<T> {
-  return jsonSchema({ type: "string", enum: values }) as Schema<T>;
-}
-
 const retainOutput = object({
-  status: choice(["invalid_input", "full", "unchanged", "stored"]),
+  status: choice(["invalid_input", "full", "unchanged", "stored", "forgotten"]),
   key: jsonSchema({ type: ["string", "null"] }) as Schema<string | null>,
   embedding: choice([...embeddingStates, "stored", "superseded"]),
 });
@@ -86,6 +86,10 @@ function readMemory(sql: SqlReader): MemoryRow[] {
   ).toArray();
 }
 
+function isForgotten(sql: SqlReader, key: string): boolean {
+  return sql.exec("SELECT key FROM memory_tombstones WHERE key = ?", key).toArray().length > 0;
+}
+
 const retain = mutation({
   description: "Save an explicit memory fact. Reuse its key to correct the current text.",
   input: object({
@@ -101,6 +105,7 @@ const retain = mutation({
   }
 
   const saved = ctx.sql.transaction(tx => {
+    if (isForgotten(tx, key)) return { status: "forgotten" } as const;
     const current = tx.exec<MemoryRow>("SELECT key, text, revision, embedding FROM memory WHERE key = ?", key).toArray()[0];
     if (current?.text === text) return { status: "unchanged", hasVector: current.embedding !== null } as const;
     if (current) {
@@ -116,7 +121,7 @@ const retain = mutation({
   });
 
   const { status } = saved;
-  if (status === "full") return { status, key, embedding: "not_attempted" };
+  if (status === "full" || status === "forgotten") return { status, key, embedding: "not_attempted" };
   const selected = selectAccount(ctx.app.accounts.openai);
   if (!selected.account) return { status, key, embedding: selected.reason };
   if (status === "unchanged") return { status, key, embedding: saved.hasVector ? "stored" : "not_attempted" };
@@ -160,4 +165,54 @@ const recall = query({
   return { status: "ok", mode: "semantic", embedding: "used", results: rank(rows, text, limit, result.vector) };
 });
 
-export default defineApp(requirements, { tools: router({ retain, recall }) });
+export const listMemory = query({
+  description: "List a page of current memory facts in key order for human review.",
+  input: object({
+    cursor: string({ description: "Start after this key. Use nextCursor from the preceding page." }).optional(),
+    filter: string({ description: "Literal, case-sensitive key or text substring, up to 600 characters." }).optional(),
+    limit: number({ description: "Whole number from 1 to 50. Defaults to 25." }).optional(),
+  }),
+  output: listOutput,
+}, async (ctx: ReadContext, { cursor, filter = "", limit = defaultPageSize }): Promise<Infer<typeof listOutput>> => {
+  if ((cursor !== undefined && !keyPattern.test(cursor)) || (filter !== "" && !validLength(filter, 600)) ||
+      !Number.isInteger(limit) || limit < 1 || limit > maxPageSize) {
+    return { status: "invalid_input", rows: [], nextCursor: null };
+  }
+  const rows = ctx.sql.exec<ListedFact>(
+    `SELECT key, text, revision FROM memory
+     WHERE key > ? AND (instr(key, ?) > 0 OR instr(text, ?) > 0)
+     ORDER BY key LIMIT ?`, cursor ?? "", filter, filter, limit + 1,
+  ).toArray();
+  const hasMore = rows.length > limit;
+  if (hasMore) rows.pop();
+  return { status: "ok", rows, nextCursor: hasMore ? rows[limit - 1].key : null };
+});
+
+export const forgetMemory = mutation({
+  description: "Permanently delete one reviewed fact and block future retains of its key. Requires human approval.",
+  input: object({
+    key: string({ description: "Exact key from admin.list." }),
+    expectedRevision: number({ description: "Exact revision from admin.list." }),
+  }),
+  output: forgetOutput,
+  approval: always(),
+}, async (ctx: WriteContext, { key, expectedRevision }): Promise<Infer<typeof forgetOutput>> => {
+  if (!keyPattern.test(key) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+    return { status: "invalid_input" };
+  }
+  return ctx.sql.transaction(tx => {
+    const deleted = tx.exec("DELETE FROM memory WHERE key = ? AND revision = ?", key, expectedRevision);
+    if (deleted.rowsWritten > 0) {
+      tx.exec("INSERT INTO memory_tombstones (key) VALUES (?)", key);
+      return { status: "forgotten" };
+    }
+    if (tx.exec("SELECT key FROM memory WHERE key = ?", key).toArray().length > 0) {
+      return { status: "stale_revision" };
+    }
+    return { status: isForgotten(tx, key) ? "already_forgotten" : "not_found" };
+  });
+});
+
+export default defineApp(requirements, {
+  tools: router({ retain, recall, admin: router({ list: listMemory, forget: forgetMemory }) }),
+});

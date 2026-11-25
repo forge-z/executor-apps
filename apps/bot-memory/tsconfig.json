@@ -4,6 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
     "types": [],
     "strict": true,
     "skipLibCheck": true,
@@ -11,5 +12,5 @@
     "outDir": "build",
     "noEmitOnError": true
   },
-  "include": ["index.ts", "src/**/*.ts"]
+  "include": ["index.ts", "src/**/*.ts", "ui/**/*.tsx"]
 }
