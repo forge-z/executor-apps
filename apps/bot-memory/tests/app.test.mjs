@@ -216,6 +216,37 @@ test('admin list returns prior text newest first without including it in filters
   assert.deepEqual((await h.recall({ query: 'First' })).results, []);
 });
 
+test('the history cap blocks corrections without changes until an approved forget frees space', async t => {
+  const h = await host(t);
+  h.db.prepare('INSERT INTO memory (key, text, revision) VALUES (?, ?, ?)').run('bulk', 'Current bulk fact', 1000);
+  const insert = h.db.prepare('INSERT INTO memory_history (key, revision, text) VALUES (?, ?, ?)');
+  for (let revision = 1; revision < 1000; revision++) insert.run('bulk', revision, 'Seeded fact');
+  const historySize = h.db.prepare('SELECT count(*) AS count FROM memory_history');
+  const initial = { key: 'target', text: 'Original fact' };
+  const correction = { ...initial, text: 'Corrected fact' };
+  await h.retain(initial);
+  await h.retain({ key: 'removable', text: 'First removable fact' });
+  assert.equal((await h.retain({ key: 'removable', text: 'Second removable fact' })).status, 'stored');
+  assert.equal(historySize.get().count, 1000);
+
+  assert.deepEqual(await h.retain(correction, h.accounts()), {
+    status: 'full', key: initial.key, embedding: 'not_attempted',
+  });
+  assert.deepEqual((await h.list({ filter: initial.key })).rows, [{ ...initial, revision: 1, history: [] }]);
+  assert.equal(historySize.get().count, 1000);
+  assert.equal((await h.retain(initial)).status, 'unchanged');
+  assert.equal((await h.retain({ key: 'new', text: 'New fact' })).status, 'stored');
+
+  assert.deepEqual(await h.forget({ key: 'removable', expectedRevision: 2 }), { status: 'forgotten' });
+  assert.equal(historySize.get().count, 999);
+  assert.equal((await h.retain(correction)).status, 'stored');
+  assert.deepEqual((await h.list({ filter: initial.key })).rows, [{
+    ...correction, revision: 2, history: [{ revision: 1, text: initial.text }],
+  }]);
+  assert.equal(historySize.get().count, 1000);
+  assert.equal(requests.length, 0);
+});
+
 test('a current-row update failure rolls back the history insert', async t => {
   const h = await host(t);
   await h.retain({ key: 'atomic', text: 'Keep on failure' });

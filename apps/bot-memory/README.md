@@ -11,6 +11,8 @@ See the [installation skill](SKILL.md) for deployment and verification.
 
 Each installation holds up to 300 current keys. Facts are limited to 600 Unicode code points, queries to 300. Only explicit corrections create history, and recall searches only current facts. Do not store secrets or sensitive conversation data.
 
+Each installation holds up to 1,000 history rows. At that limit, a correction returns `full` without changing the fact or its history. An approved `admin.forget` frees the space used by that fact’s history.
+
 Word matching works with no API key. Optional semantic search uses OpenAI text-embedding-3-small. Link a key only in Executor’s secure account form. If enabled, fact and query text may be sent to OpenAI and incur charges; saved facts are still searchable by words when embedding is unavailable. Facts written without an embedding are not backfilled automatically.
 
 ## Human review and forget

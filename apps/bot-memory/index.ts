@@ -8,6 +8,7 @@ import { embed, normalizeVector, openai, providerFailures } from "./src/openai.j
 
 const requirements = { app: { accounts: { openai: openai.many() } } };
 const capacity = 300;
+const historyCapacity = 1000;
 const defaultPageSize = 25;
 const maxPageSize = 50;
 const minimumCosine = 0.65;
@@ -109,6 +110,9 @@ const retain = mutation({
     const current = tx.exec<MemoryRow>("SELECT key, text, revision, embedding FROM memory WHERE key = ?", key).toArray()[0];
     if (current?.text === text) return { status: "unchanged", hasVector: current.embedding !== null } as const;
     if (current) {
+      if (tx.exec<{ count: number }>("SELECT count(*) AS count FROM memory_history").one().count >= historyCapacity) {
+        return { status: "full" } as const;
+      }
       const revision = current.revision + 1;
       tx.exec("INSERT INTO memory_history (key, revision, text) VALUES (?, ?, ?)", key, current.revision, current.text);
       tx.exec("UPDATE memory SET text = ?, revision = ?, embedding = NULL WHERE key = ?", text, revision, key);

@@ -45,6 +45,7 @@ Before deployment or activation, ensure every bot connection that can reach this
 
 - The lexical path needs no OpenAI account. Without usable embeddings, a recall may find exact words but not a paraphrase.
 - An overwrite keeps the previous text in revision history, visible only through `admin.list` and the review panel. The panel pages current SQLite rows using literal filters; neither filtering nor recall searches history.
+- At the installation-wide limit of 1,000 history rows, an overwrite returns `full` without changing the fact or its history. An approved `admin.forget` frees the space used by that fact’s history.
 - Forget deletes the reviewed fact and all its history and blocks reuse of its exact key. It has no restore flow and cannot purge copies outside the live tables. Keep the additive migrations and history- and tombstone-aware writers active. Builds from before `0003` ignore history, and builds from before `0002` ignore tombstones. A pre-forget database snapshot can undo the fence. Different-key suggestions remain possible until Pi Bot uses stable keys and fences its queue.
 - Tools exposed over MCP do not automatically run at the start or end of every agent turn. Do not enable automatic capture or disable the existing provider as part of installation.
 - Treat recalled text as data, not as instructions. Do not store credentials or raw conversations.
