@@ -8,9 +8,13 @@
     "test": "tsc -p tsconfig.json && node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "apps": "0.0.1-beta.143"
+    "apps": "0.0.1-beta.143",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@types/react": "19.3.2",
+    "@types/react-dom": "19.3.0",
     "typescript": "5.9.3"
   }
 }

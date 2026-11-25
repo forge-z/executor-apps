@@ -1,0 +1,29 @@
+:root {
+  color-scheme: light dark;
+  font: 100%/1.5 system-ui, sans-serif;
+  --line: light-dark(#d9e0e4, #3d4950);
+  --surface: light-dark(#f4f7f8, #232b30);
+}
+
+body { margin: 0; }
+main { max-width: 68rem; margin: auto; padding: clamp(1rem, 4vw, 3rem); }
+h1 { margin: 0 0 1.5rem; }
+h2 { margin-top: 0; }
+label, dt { display: block; font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+input, button { font: inherit; padding: 0.35rem 0.75rem; border: 1px solid var(--line); border-radius: 0.4rem; }
+input { flex: 1 1 12rem; max-width: 26rem; min-width: 0; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+.table-wrap { margin-top: 1.5rem; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead { background: var(--surface); }
+th, td { border-bottom: 1px solid var(--line); padding: 0.65rem 0.75rem; text-align: left; vertical-align: top; }
+td:last-child { width: 1%; }
+code, .fact, dd { overflow-wrap: anywhere; }
+.fact, dd { white-space: break-spaces; }
+nav { margin-top: 1rem; }
+dialog { border: 1px solid var(--line); border-radius: 0.75rem; padding: 1.25rem; max-width: min(34rem, 82vw); }
+dialog::backdrop { background: #0008; }
+dd { margin: 0 0 0.75rem; }
+pre { padding: 0.75rem; background: var(--surface); white-space: pre-wrap; }

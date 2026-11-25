@@ -1,0 +1,3 @@
+CREATE TABLE memory_tombstones (
+  key TEXT PRIMARY KEY NOT NULL
+) STRICT;
