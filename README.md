@@ -9,6 +9,7 @@ This is a collection of small, self-contained apps for [Executor](https://execut
 | App | What it does | Install with an agent |
 | --- | --- | --- |
 | [Radar News](apps/radar-news/) | Collects AI, Brazilian automotive, and Apple news for an editorial workflow. | [Installation skill](apps/radar-news/SKILL.md) |
+| [Bot Memory](apps/bot-memory/) | Stores explicit facts per bot, with optional semantic search. | [Installation skill](apps/bot-memory/SKILL.md) |
 
 ## Get started
 
