@@ -35,17 +35,17 @@ const delTip = client.mutation(mutationReference<typeof removeSuggestion>("remov
 const watch = client.mutation(mutationReference<typeof setEpisodeWatched>("setEpisodeWatched"), Episode);
 
 const labels = [
-  ["assistindo", "Assistindo agora"],
-  ["pendente", "Já saiu e não viu"],
-  ["em_dia", "Em dia, esperando"],
-  ["terminada", "Terminadas"],
+  ["assistindo", "Watching now"],
+  ["pendente", "Released, not watched"],
+  ["em_dia", "Up to date, waiting"],
+  ["terminada", "Finished"],
 ];
 const nav = [
-  ["assistindo", "Assistindo"],
-  ["pendente", "Pra ver"],
-  ["em_dia", "Em dia"],
-  ["terminada", "Terminadas"],
-  ["dicas", "Dicas"],
+  ["assistindo", "Watching"],
+  ["pendente", "To watch"],
+  ["em_dia", "Up to date"],
+  ["terminada", "Finished"],
+  ["dicas", "Recommendations"],
 ];
 
 function App() {
@@ -96,7 +96,7 @@ function App() {
     if (busy) return;
     setBusy(key); setFailure("");
     try { await work(); }
-    catch { setFailure("Não consegui salvar. Tente de novo."); }
+    catch { setFailure("Could not save. Try again."); }
     finally { setBusy(""); }
   }
   async function submit(event: React.FormEvent) {
@@ -128,9 +128,9 @@ function App() {
       <header className="flex items-baseline justify-between border-b border-[#deded7] pb-4">
         <div>
           <h1 className="text-2xl font-medium tracking-tight m-0">TV Tracker</h1>
-          <p className="text-sm text-[#77776f] m-0">Onde parou, o que falta, o que vem e o que vale começar.</p>
+          <p className="text-sm text-[#77776f] m-0">Where you stopped, what's left, what's next, and what to start.</p>
         </div>
-        <span className="text-xs text-[#77836e]">{showsQuery.pending ? "Conectando…" : problem ? "Sem conexão" : "Ao vivo"}</span>
+        <span className="text-xs text-[#77836e]">{showsQuery.pending ? "Connecting…" : problem ? "Disconnected" : "Live"}</span>
       </header>
       {problem ? <p role="alert" className="text-sm text-[#a74636]">{problem}</p> : null}
       {failure ? <p role="alert" className="text-sm text-[#a74636]">{failure}</p> : null}
@@ -153,13 +153,13 @@ function App() {
             <article key={t.id} className="bg-white border border-[#e4e4dd] rounded-xl p-4">
               <div className="flex justify-between gap-3">
                 <h3 className="font-medium m-0">{t.title}</h3>
-                <button onClick={() => void run("tip-" + t.id, () => delTip({ id: t.id }))} className="text-xs text-[#9a6b5b] bg-transparent border-0 cursor-pointer">remover</button>
+                <button onClick={() => void run("tip-" + t.id, () => delTip({ id: t.id }))} className="text-xs text-[#9a6b5b] bg-transparent border-0 cursor-pointer">Remove</button>
               </div>
               <p className="text-sm text-[#56564f] my-2">{t.why}</p>
               <p className="text-xs text-[#888880] m-0">{t.platform}{t.source ? " · " + t.source : ""}</p>
               <button onClick={() => void run("tip-status-" + t.id, () => tipStatus({ id: t.id, status: t.status === "nova" ? "assistindo" : "nova" }))}
                 className="mt-3 text-xs rounded-md border border-[#ccc] bg-[#fafaf8] px-3 py-1.5 cursor-pointer">
-                {t.status === "nova" ? "Começar a assistir" : "Voltar pra nova"}
+                {t.status === "nova" ? "Start watching" : "Move back to new"}
               </button>
             </article>
           ))}
@@ -171,9 +171,9 @@ function App() {
               setTipTitle(""); setTipWhy("");
             });
           }} className="bg-white border border-[#e4e4dd] rounded-xl p-4 flex flex-col gap-2">
-            <input value={tipTitle} onChange={e => setTipTitle(e.target.value)} placeholder="Nova recomendação" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
-            <textarea value={tipWhy} onChange={e => setTipWhy(e.target.value)} placeholder="Por que serve" rows={2} className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
-            <button className="self-start rounded-lg bg-[#2f3a31] text-white text-sm px-4 py-2 cursor-pointer">Adicionar dica</button>
+            <input value={tipTitle} onChange={e => setTipTitle(e.target.value)} placeholder="New recommendation" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
+            <textarea value={tipWhy} onChange={e => setTipWhy(e.target.value)} placeholder="Why it fits" rows={2} className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
+            <button className="self-start rounded-lg bg-[#2f3a31] text-white text-sm px-4 py-2 cursor-pointer">Add recommendation</button>
           </form>
         </section>
       ) : (
@@ -185,8 +185,8 @@ function App() {
                 <div className="flex justify-between gap-2">
                   <h3 className="font-medium m-0">{s.title}</h3>
                   <div className="flex gap-2 shrink-0">
-                    <button onClick={() => fill(s)} className="text-xs text-[#5c6d5e] bg-transparent border-0 cursor-pointer">editar</button>
-                    <button onClick={() => void run("del-" + s.id, () => del({ id: s.id }))} className="text-xs text-[#9a6b5b] bg-transparent border-0 cursor-pointer">remover</button>
+                    <button onClick={() => fill(s)} className="text-xs text-[#5c6d5e] bg-transparent border-0 cursor-pointer">Edit</button>
+                    <button onClick={() => void run("del-" + s.id, () => del({ id: s.id }))} className="text-xs text-[#9a6b5b] bg-transparent border-0 cursor-pointer">Remove</button>
                   </div>
                 </div>
                 <p className="text-sm text-[#56564f] my-2">
@@ -196,11 +196,11 @@ function App() {
                 <p className="text-xs text-[#888880] m-0">{[s.genre, s.platform].filter(Boolean).join(" · ")}</p>
                 {s.note ? <p className="text-xs text-[#56564f] mt-2 mb-0">{s.note}</p> : null}
                 <button onClick={() => openEpisodes(s.id)} className="mt-3 text-xs rounded-md border border-[#ccc] bg-[#fafaf8] px-3 py-1.5 cursor-pointer">
-                  Episódios ({showEpisodes.filter(e => e.watched).length}/{showEpisodes.length})
+                  Episodes ({showEpisodes.filter(e => e.watched).length}/{showEpisodes.length})
                 </button>
                 {open === s.id ? (
                   <div className="mt-3 border-t border-[#eee] pt-3">
-                    {showEpisodes.length === 0 ? <p className="text-xs text-[#888880]">Adicione o primeiro episódio abaixo.</p> : null}
+                    {showEpisodes.length === 0 ? <p className="text-xs text-[#888880]">Add the first episode below.</p> : null}
                     {showEpisodes.map(e => (
                       <label key={e.id} className="flex items-center gap-2 text-sm py-1 cursor-pointer">
                         <input
@@ -215,8 +215,8 @@ function App() {
                       </label>
                     ))}
                     <div className="flex items-center gap-2 mt-3">
-                      <input aria-label="Temporada" value={newSeason} onChange={e => setNewSeason(e.target.value)} inputMode="numeric" className="w-16 border border-[#ddd] rounded-md px-2 py-1 text-xs" />
-                      <input aria-label="Episódio" value={newEpisode} onChange={e => setNewEpisode(e.target.value)} inputMode="numeric" className="w-16 border border-[#ddd] rounded-md px-2 py-1 text-xs" />
+                      <input aria-label="Season" value={newSeason} onChange={e => setNewSeason(e.target.value)} inputMode="numeric" className="w-16 border border-[#ddd] rounded-md px-2 py-1 text-xs" />
+                      <input aria-label="Episode" value={newEpisode} onChange={e => setNewEpisode(e.target.value)} inputMode="numeric" className="w-16 border border-[#ddd] rounded-md px-2 py-1 text-xs" />
                       <button
                         disabled={!Number(newSeason) || !Number(newEpisode)}
                         onClick={() => void run("new-episode", async () => {
@@ -224,7 +224,7 @@ function App() {
                           setNewEpisode(String(Number(newEpisode) + 1));
                         })}
                         className="rounded-md bg-[#2f3a31] text-white text-xs px-3 py-1.5 cursor-pointer disabled:opacity-50">
-                        Adicionar episódio
+                        Add episode
                       </button>
                     </div>
                   </div>
@@ -236,23 +236,23 @@ function App() {
       )}
 
       <form onSubmit={e => void submit(e)} className="mt-8 bg-white border border-[#e4e4dd] rounded-xl p-4 grid gap-3 sm:grid-cols-2">
-        <h2 className="sm:col-span-2 text-sm font-medium m-0">{editing ? "Editar série" : "Adicionar série"}</h2>
-        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Nome da série" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" required />
+        <h2 className="sm:col-span-2 text-sm font-medium m-0">{editing ? "Edit show" : "Add show"}</h2>
+        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Show name" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" required />
         <select value={status} onChange={e => setStatus(e.target.value)} className="border border-[#ddd] rounded-lg px-3 py-2 text-sm bg-white">
           {labels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
-        <input value={season} onChange={e => setSeason(e.target.value)} placeholder="Temporada atual" inputMode="numeric" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
-        <input value={episode} onChange={e => setEpisode(e.target.value)} placeholder="Episódio atual" inputMode="numeric" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
-        <input value={released} onChange={e => setReleased(e.target.value)} placeholder="Temporada lançada" inputMode="numeric" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
-        <input value={genre} onChange={e => setGenre(e.target.value)} placeholder="Gênero" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
-        <input value={platform} onChange={e => setPlatform(e.target.value)} placeholder="Plataforma" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
-        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Nota" className="sm:col-span-2 border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
+        <input value={season} onChange={e => setSeason(e.target.value)} placeholder="Current season" inputMode="numeric" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
+        <input value={episode} onChange={e => setEpisode(e.target.value)} placeholder="Current episode" inputMode="numeric" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
+        <input value={released} onChange={e => setReleased(e.target.value)} placeholder="Latest released season" inputMode="numeric" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
+        <input value={genre} onChange={e => setGenre(e.target.value)} placeholder="Genre" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
+        <input value={platform} onChange={e => setPlatform(e.target.value)} placeholder="Platform" className="border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note" className="sm:col-span-2 border border-[#ddd] rounded-lg px-3 py-2 text-sm" />
         <div className="sm:col-span-2 flex gap-2">
-          <button className="rounded-lg bg-[#2f3a31] text-white text-sm px-4 py-2 cursor-pointer">{editing ? "Salvar" : "Adicionar"}</button>
-          {editing ? <button type="button" onClick={reset} className="rounded-lg border border-[#ddd] bg-white text-sm px-4 py-2 cursor-pointer">Cancelar</button> : null}
+          <button className="rounded-lg bg-[#2f3a31] text-white text-sm px-4 py-2 cursor-pointer">{editing ? "Save" : "Add"}</button>
+          {editing ? <button type="button" onClick={reset} className="rounded-lg border border-[#ddd] bg-white text-sm px-4 py-2 cursor-pointer">Cancel</button> : null}
         </div>
       </form>
-      <footer className="text-xs text-[#a1a197] mt-8">TV Tracker · feito com Executor</footer>
+      <footer className="text-xs text-[#a1a197] mt-8">TV Tracker · built with Executor</footer>
     </main>
   );
 }

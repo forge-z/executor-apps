@@ -1,22 +1,22 @@
 # TV Tracker
 
-Template de app Executor para acompanhar séries, temporadas e episódios.
+An Executor app template for tracking shows, seasons, and episodes.
 
-## O que faz
+## Features
 
-- Organiza séries em quatro grupos: assistindo, pendentes, em dia e terminadas.
-- Guarda onde você parou e até qual temporada já foi lançada.
-- Registra gênero, plataforma e notas livres.
-- Marca cada episódio como assistido individualmente.
-- Mantém recomendações com motivo, plataforma e fonte.
-- Persiste séries, episódios e recomendações no banco do próprio app.
+- Organize shows into four groups: watching, pending, up to date, and finished.
+- Store where you stopped and the latest released season.
+- Record genre, platform, and free-form notes.
+- Mark each episode as watched individually.
+- Keep recommendations with a reason, platform, and source.
+- Persist shows, episodes, and recommendations in the app's own database.
 
-## Instalação
+## Installation
 
-Crie um app novo no Executor usando os arquivos desta pasta. Não sobrescreva outro app. O `package.json` fixa a versão do framework usada no desenvolvimento; se o Executor exigir outra, atualize `apps` para a versão informada pelo servidor antes de criar o app.
+Create a new Executor app using the files in this directory. Do not overwrite another app. The `package.json` pins the framework version used during development; if your Executor server requires a different version, update `apps` to the version reported by the server before creating the app.
 
-O template não contém séries, episódios ou recomendações preenchidos. As migrações criam apenas as tabelas vazias.
+This template contains no shows, episodes, or recommendations. The migrations create empty tables only.
 
-## Verificação
+## Verification
 
-Depois do deploy, confira `listShows`, `listSuggestions` e `listEpisodes`: todos devem retornar arrays vazios. Para testar o checkbox, adicione uma série pela interface, abra `Episódios`, adicione um episódio e marque-o como assistido.
+After deploying, call `listShows`, `listSuggestions`, and `listEpisodes`. Each one should return an empty array. To test the episode checkbox, add a show through the UI, open `Episodes`, add an episode, and mark it as watched.
